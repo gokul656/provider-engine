@@ -129,7 +129,7 @@ echo " Packages installed. Now run the Go CLI to configure:"
 echo ""
 
 if is_cp; then
-  echo "   sudo dcp-cp setup --wg-endpoint <PUBLIC_IP>:51820"
+  echo "   sudo dcp-cp setup"
   echo ""
 fi
 if is_provider; then
