@@ -1,82 +1,67 @@
-# ─────────────────────────────────────────────
-# DCP Makefile
-# Usage:
-#   make cp        — setup + boot control plane
-#   make provider  — setup + boot provider
-#   make health    — run health checks
-#   make stop      — stop all services
-#   make clean     — remove installed binaries
-# ─────────────────────────────────────────────
-
-.PHONY: cp provider health stop clean check-root
+# ─────────────────────────────────────────────────────────────────────────────
+# DCP — top-level Makefile
+# ─────────────────────────────────────────────────────────────────────────────
+.PHONY: build build-cp build-provider release install-cp install-provider \
+        install-both health clean
 
 SHELL := /bin/bash
-SUDO  := sudo
 
-# ── Enforce root for privileged targets ───────
-check-sudo:
-	@if ! sudo -v 2>/dev/null; then \
-		echo "ERROR: sudo access required"; \
-		exit 1; \
-	fi
+# ── Build ─────────────────────────────────────────────────────────────────────
 
-# ── Control Plane ─────────────────────────────
-cp: check-sudo
-	@echo "==> [CP] Base setup..."
-	@$(SUDO) bash scripts/base.sh
-	@echo "==> [CP] SPIRE..."
-	@$(SUDO) bash scripts/sprie.sh
-	@echo "==> [CP] WireGuard..."
-	@$(SUDO) bash scripts/wireguard.sh || true
-	@echo "==> [CP] Control plane services..."
-	@$(SUDO) bash scripts/control-plane.sh
-	@echo "✓ Control plane ready"
+build: build-cp build-provider
 
-# ── Provider ──────────────────────────────────
-provider: check-sudo
-	@echo "==> [PROVIDER] Base setup..."
-	@$(SUDO) bash scripts/base.sh
-	@echo "==> [PROVIDER] SPIRE agent..."
-	@$(SUDO) bash scripts/sprie.sh
-	@echo "==> [PROVIDER] WireGuard..."
-	@$(SUDO) bash scripts/wireguard.sh || true
-	@echo "==> [PROVIDER] Firecracker + Jailer..."
-	@$(SUDO) bash scripts/firecracker.sh
-	@echo "==> [PROVIDER] Provider agent..."
-	@$(SUDO) bash scripts/provider-agent.sh
-	@echo "✓ Provider ready"
+build-cp:
+	@echo "==> Building dcp-cp..."
+	@$(MAKE) -C dcp-control-plane build
+	@echo "✓ dcp-cp ready at dcp-control-plane/dcp-cp"
 
-# ── Health Checks (no sudo needed) ────────────
+build-provider:
+	@echo "==> Building dcp-provider..."
+	@$(MAKE) -C dcp-provider build
+	@echo "✓ dcp-provider ready at dcp-provider/dcp-provider"
+
+# Cross-compile for Linux (deploy target)
+release:
+	@echo "==> Cross-compiling for Linux..."
+	@$(MAKE) -C dcp-control-plane linux-amd64 linux-arm64
+	@$(MAKE) -C dcp-provider     linux-amd64 linux-arm64
+	@echo ""
+	@echo "Artifacts:"
+	@ls -lh dcp-control-plane/dist/ dcp-provider/dist/
+
+# ── Install (run on Ubuntu target machine) ────────────────────────────────────
+
+install-cp:
+	@sudo bash scripts/install.sh cp
+
+install-provider:
+	@sudo bash scripts/install.sh provider
+
+install-both:
+	@sudo bash scripts/install.sh both
+
+# ── Deploy binaries to a remote machine ──────────────────────────────────────
+# Usage: make deploy-cp HOST=user@1.2.3.4
+
+deploy-cp: release
+	@test -n "$(HOST)" || (echo "Usage: make deploy-cp HOST=user@1.2.3.4"; exit 1)
+	scp dcp-control-plane/dist/dcp-cp-linux-amd64 $(HOST):/usr/local/bin/dcp-cp
+	ssh $(HOST) "chmod +x /usr/local/bin/dcp-cp && systemctl restart dcp-cp"
+	@echo "✓ dcp-cp deployed to $(HOST)"
+
+deploy-provider: release
+	@test -n "$(HOST)" || (echo "Usage: make deploy-provider HOST=user@1.2.3.4"; exit 1)
+	scp dcp-provider/dist/dcp-provider-linux-amd64 $(HOST):/usr/local/bin/dcp-provider
+	ssh $(HOST) "chmod +x /usr/local/bin/dcp-provider && systemctl restart dcp-provider"
+	@echo "✓ dcp-provider deployed to $(HOST)"
+
+# ── Health ────────────────────────────────────────────────────────────────────
+
 health:
-	@echo ""
-	@echo "[ ntp ]"          ; chronyc tracking | grep "System time"           || echo "FAIL"
-	@echo "[ wireguard ]"    ; $(SUDO) wg show                                 || echo "FAIL"
-	@echo "[ spire-server ]" ; $(SUDO) spire-server healthcheck \
-	                            -socketPath /tmp/spire-server/private/api.sock  || echo "FAIL"
-	@echo "[ spire-agent ]"  ; $(SUDO) spire-agent healthcheck \
-	                            -socketPath /tmp/spire-agent/public/api.sock    || echo "FAIL"
-	@echo "[ redis ]"        ; redis-cli ping                                   || echo "FAIL"
-	@echo "[ postgresql ]"   ; pg_isready                                       || echo "FAIL"
-	@echo "[ firecracker ]"  ; firecracker --version                            || echo "FAIL"
-	@echo "[ kvm ]"          ; ls /dev/kvm && echo "available"                  || echo "NOT available"
-	@echo ""
+	@sudo bash scripts/health.sh
 
-# ── Stop All ──────────────────────────────────
-stop: check-sudo
-	@echo "==> Stopping all DCP services..."
-	@$(SUDO) systemctl stop \
-		dcp-auth dcp-registry dcp-cert-issuer dcp-provider \
-		spire-agent spire-server \
-		wg-quick@wg0 \
-		redis postgresql chrony 2>/dev/null || true
-	@echo "✓ All services stopped"
+# ── Clean ─────────────────────────────────────────────────────────────────────
 
-# ── Clean ─────────────────────────────────────
-clean: check-sudo
-	@echo "==> Removing binaries..."
-	@$(SUDO) rm -f /usr/local/bin/spire-server \
-	               /usr/local/bin/spire-agent \
-	               /usr/local/bin/firecracker \
-	               /usr/local/bin/jailer
-	@$(SUDO) rm -rf /opt/spire /opt/dcp/kernels
-	@echo "✓ Clean complete"
+clean:
+	@$(MAKE) -C dcp-control-plane clean
+	@$(MAKE) -C dcp-provider clean
