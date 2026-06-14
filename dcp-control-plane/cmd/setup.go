@@ -5,10 +5,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	setupWGEndpoint string
-)
-
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Configure this machine as a DCP control plane (run once as root)",
@@ -20,10 +16,12 @@ var setupCmd = &cobra.Command{
   • PostgreSQL user/database
   • JWT secret generation
   • dcp-cp systemd service unit
-  • UFW firewall rules`,
+  • UFW firewall rules
+
+The WireGuard endpoint advertised to providers is set at runtime via:
+  dcp-cp serve --wg-endpoint <PUBLIC_IP>:51820`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return setup.Run(setup.Config{
-			WGEndpoint: setupWGEndpoint,
 			SSHCAPath:  "/etc/dcp/ssh-ca/platform_ca",
 			WGPrivPath: "/etc/wireguard/cp_private",
 			WGPubPath:  "/etc/wireguard/cp_public",
@@ -33,8 +31,4 @@ var setupCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(setupCmd)
-	setupCmd.Flags().StringVar(&setupWGEndpoint,
-		"wg-endpoint",
-		envOr("DCP_PUBLIC_IP", "127.0.0.1")+":51820",
-		"Public host:port providers use to reach this machine's WireGuard (e.g. 1.2.3.4:51820)")
 }

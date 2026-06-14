@@ -16,9 +16,6 @@ const (
 )
 
 type Config struct {
-	PGDSN      string // full DSN or empty (will build from password file)
-	JWTSecret  string // empty = generate
-	WGEndpoint string // host:port for providers to connect to, e.g. "1.2.3.4:51820"
 	SSHCAPath  string
 	WGPrivPath string
 	WGPubPath  string
@@ -330,20 +327,21 @@ func setupJWTSecret(cfg Config) error {
 // ── systemd unit ──────────────────────────────────────────────────────────────
 
 func writeSystemdUnit(cfg Config) error {
+	// --wg-endpoint is NOT embedded here — pass it at runtime via serve flags
+	// or set DCP_WG_ENDPOINT env var. This keeps setup independent of the
+	// machine's public IP, which may not be known at setup time.
 	unit := fmt.Sprintf(`[Unit]
 Description=DCP Control Plane
 After=network.target postgresql.service redis-server.service spire-agent.service wg-quick@wg0.service
 
 [Service]
-EnvironmentFile=/etc/dcp/pg_dsn
 ExecStart=/usr/local/bin/dcp-cp serve \
-  --jwt-secret $$(cat /etc/dcp/jwt_secret) \
-  --pg $$(cat /etc/dcp/pg_dsn) \
+  --jwt-secret $(cat /etc/dcp/jwt_secret) \
+  --pg $(cat /etc/dcp/pg_dsn) \
   --redis redis://localhost:6379 \
   --ssh-ca %s \
   --wg-privkey %s \
-  --wg-pubkey %s \
-  --wg-endpoint %s
+  --wg-pubkey %s
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -351,7 +349,7 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-`, cfg.SSHCAPath, cfg.WGPrivPath, cfg.WGPubPath, cfg.WGEndpoint)
+`, cfg.SSHCAPath, cfg.WGPrivPath, cfg.WGPubPath)
 
 	if err := writeFile("/etc/systemd/system/dcp-cp.service", unit, 0644); err != nil {
 		return err
@@ -376,21 +374,23 @@ func setupFirewall(_ Config) error {
 
 func printSummary(cfg Config) {
 	dsn, _ := os.ReadFile("/etc/dcp/pg_dsn")
+	pub, _ := os.ReadFile(cfg.WGPubPath)
 	fmt.Println()
 	fmt.Println("────────────────────────────────────────────────────")
 	fmt.Println(" DCP Control Plane setup complete")
 	fmt.Println("────────────────────────────────────────────────────")
-	fmt.Printf(" SSH CA:        %s\n", cfg.SSHCAPath)
-	fmt.Printf(" WG pubkey:     %s\n", cfg.WGPubPath)
-	fmt.Printf(" WG endpoint:   %s\n", cfg.WGEndpoint)
-	fmt.Printf(" PG DSN:        %s\n", strings.TrimSpace(string(dsn)))
-	fmt.Printf(" JWT secret:    /etc/dcp/jwt_secret\n")
-	fmt.Printf(" SPIRE token:   /etc/spire/join_token\n")
+	fmt.Printf(" SSH CA:       %s\n", cfg.SSHCAPath)
+	fmt.Printf(" WG pubkey:    %s", string(pub))
+	fmt.Printf(" PG DSN:       %s\n", strings.TrimSpace(string(dsn)))
+	fmt.Printf(" JWT secret:   /etc/dcp/jwt_secret\n")
+	fmt.Printf(" SPIRE token:  /etc/spire/join_token\n")
 	fmt.Println()
 	fmt.Println(" Next steps:")
-	fmt.Println("   1. Copy binary:   cp dcp-cp /usr/local/bin/dcp-cp")
-	fmt.Println("   2. Start service: systemctl enable --now dcp-cp")
-	fmt.Println("   3. Get token:     dcp-cp token generate")
+	fmt.Println("   1. Copy binary:    cp dcp-cp /usr/local/bin/dcp-cp")
+	fmt.Println("   2. Start service:  systemctl enable --now dcp-cp")
+	fmt.Println("   3. Serve with endpoint:")
+	fmt.Println("        dcp-cp serve --wg-endpoint <PUBLIC_IP>:51820 --jwt-secret $(cat /etc/dcp/jwt_secret)")
+	fmt.Println("   4. Get provider token: dcp-cp token generate --spire")
 	fmt.Println("────────────────────────────────────────────────────")
 }
 
