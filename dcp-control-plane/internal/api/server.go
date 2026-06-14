@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -134,6 +135,10 @@ func (h *handlers) register(w http.ResponseWriter, r *http.Request) {
 		BinaryHash: req.Meta["binary_hash"],
 	})
 	if err != nil {
+		if errors.Is(err, registry.ErrInvalidToken) {
+			httpErr(w, "invalid registration token", http.StatusUnauthorized)
+			return
+		}
 		httpErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -147,6 +152,7 @@ func (h *handlers) register(w http.ResponseWriter, r *http.Request) {
 		"provider_id": result.ProviderID,
 		"wg_config":   result.WGConfig,
 		"tunnel_port": result.TunnelPort,
+		"wg_ip":       result.WGIP,
 	})
 }
 

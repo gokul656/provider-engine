@@ -13,6 +13,8 @@ var (
 	token    string
 	location string
 	logLevel string
+	mode     string
+	sshPort  int
 )
 
 var rootCmd = &cobra.Command{
@@ -24,6 +26,8 @@ var rootCmd = &cobra.Command{
 			Token:           token,
 			Location:        location,
 			LogLevel:        logLevel,
+			Mode:            mode,
+			SSHPort:         sshPort,
 		}
 		return agent.Run(cfg)
 	},
@@ -41,6 +45,8 @@ func init() {
 	rootCmd.Flags().StringVar(&token, "token", envOr("DCP_TOKEN", ""), "Provider registration token")
 	rootCmd.Flags().StringVar(&location, "location", envOr("DCP_LOCATION", "us-east"), "Provider location tag")
 	rootCmd.Flags().StringVar(&logLevel, "log-level", "info", "Log level (debug|info|warn|error)")
+	rootCmd.Flags().StringVar(&mode, "mode", envOr("DCP_MODE", "auto"), "Mode: auto|firecracker|container|ssh (ssh = Termux/no-root)")
+	rootCmd.Flags().IntVar(&sshPort, "ssh-port", 0, "SSH port to advertise in ssh mode (default: 8022 on Android, 22 otherwise)")
 	_ = rootCmd.MarkFlagRequired("token")
 }
 

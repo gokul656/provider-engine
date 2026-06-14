@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -9,6 +10,10 @@ import (
 	"github.com/dcp/control-plane/pkg/store"
 	"github.com/google/uuid"
 )
+
+// ErrInvalidToken is returned when a provider registers with a token that was
+// never issued (or has been revoked).
+var ErrInvalidToken = errors.New("invalid or unknown registration token")
 
 type Registry struct {
 	pg         *store.PG
@@ -41,6 +46,15 @@ type RegisterResult struct {
 }
 
 func (r *Registry) Register(ctx context.Context, req RegisterRequest) (*RegisterResult, error) {
+	// Reject registration unless the token was issued via `dcp-cp token generate`.
+	valid, err := r.redis.TokenValid(ctx, req.Token)
+	if err != nil {
+		return nil, fmt.Errorf("validate token: %w", err)
+	}
+	if !valid {
+		return nil, ErrInvalidToken
+	}
+
 	wgIP, err := r.redis.AllocWGIP(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("alloc wg ip: %w", err)

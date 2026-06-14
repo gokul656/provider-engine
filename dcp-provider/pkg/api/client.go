@@ -48,6 +48,7 @@ type RegisterResponse struct {
 	ProviderID string `json:"provider_id"`
 	WGConfig   string `json:"wg_config"`   // full wg0.conf content
 	TunnelPort int    `json:"tunnel_port"` // SSH relay port on CP
+	WGIP       string `json:"wg_ip"`       // assigned WireGuard IP for this provider
 }
 
 func (c *Client) Register(ctx context.Context, req RegisterRequest) (*RegisterResponse, error) {

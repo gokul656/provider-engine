@@ -21,6 +21,8 @@ type Config struct {
 	Token           string
 	Location        string
 	LogLevel        string
+	Mode            string // "auto" | "firecracker" | "container" | "ssh"
+	SSHPort         int    // only used in ssh mode
 }
 
 func Run(cfg Config) error {
@@ -29,12 +31,19 @@ func Run(cfg Config) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// 1. Detect mode
-	mode := "container"
-	if vm.KVMAvailable() {
-		mode = "firecracker"
+	// 1. Resolve mode
+	mode := cfg.Mode
+	if mode == "auto" || mode == "" {
+		switch {
+		case vm.KVMAvailable():
+			mode = "firecracker"
+		case isAndroid():
+			mode = "ssh"
+		default:
+			mode = "container"
+		}
 	}
-	slog.Info("agent: detected mode", "mode", mode)
+	slog.Info("agent: mode", "mode", mode)
 
 	// 2. WireGuard keypair
 	privKey, pubKey, err := wireguard.GenerateKeypair()
@@ -99,18 +108,20 @@ func Run(cfg Config) error {
 		}
 
 		slog.Info("agent: received job", "job_id", job.JobID)
-		go handleJob(ctx, client, job, mode, regResp.TunnelPort)
+		go handleJob(ctx, client, job, mode, regResp.TunnelPort, cfg.SSHPort, regResp.WGIP)
 	}
 }
 
-func handleJob(ctx context.Context, client *api.Client, job *api.DeployJob, mode string, tunnelPort int) {
+func handleJob(ctx context.Context, client *api.Client, job *api.DeployJob, mode string, tunnelPort, sshPort int, wgIP string) {
 	var vmIP string
+	var reportPort int
 	var spawnErr error
 
-	if mode == "firecracker" {
+	switch mode {
+	case "firecracker":
 		v, err := vm.Spawn(ctx, vm.SpawnConfig{
 			JobID:     job.JobID,
-			ImagePath: job.ImageURL, // assumed to be a local path after image pull
+			ImagePath: job.ImageURL,
 			CPUCores:  job.CPUCores,
 			MemoryMB:  job.MemoryMB,
 			SSHPubKey: job.SSHPubKey,
@@ -119,8 +130,10 @@ func handleJob(ctx context.Context, client *api.Client, job *api.DeployJob, mode
 			spawnErr = err
 		} else {
 			vmIP = v.IP()
+			reportPort = tunnelPort
 		}
-	} else {
+
+	case "container":
 		v, err := vm.SpawnContainer(ctx, vm.ContainerConfig{
 			JobID:     job.JobID,
 			ImageRef:  job.ImageURL,
@@ -132,13 +145,30 @@ func handleJob(ctx context.Context, client *api.Client, job *api.DeployJob, mode
 			spawnErr = err
 		} else {
 			vmIP = v.IP()
+			reportPort = tunnelPort
+		}
+
+	case "ssh":
+		// Device itself is the compute — no VM spawned.
+		// Buyer SSHs directly into this device over WireGuard.
+		v, err := vm.SpawnSSH(ctx, vm.SSHConfig{
+			JobID:       job.JobID,
+			WireGuardIP: wgIP,
+			SSHPort:     sshPort,
+			SSHPubKey:   job.SSHPubKey,
+		})
+		if err != nil {
+			spawnErr = err
+		} else {
+			vmIP = v.IP()
+			reportPort = v.Port()
 		}
 	}
 
 	report := api.VMReport{
 		JobID:      job.JobID,
 		ProviderID: client.ProviderID(),
-		Port:       tunnelPort,
+		Port:       reportPort,
 	}
 	if spawnErr != nil {
 		slog.Error("spawn failed", "job", job.JobID, "err", spawnErr)
@@ -147,12 +177,16 @@ func handleJob(ctx context.Context, client *api.Client, job *api.DeployJob, mode
 	} else {
 		report.Status = "running"
 		report.VMIP = vmIP
-		// Start SSH proxy so CP can reach the VM
-		go func() {
-			if err := tunnel.Proxy(tunnelPort, vmIP); err != nil {
-				slog.Error("tunnel error", "err", err)
-			}
-		}()
+		// In ssh mode the buyer connects directly over WireGuard — no proxy needed.
+		if mode != "ssh" {
+			go func() {
+				// Bind the relay to the provider's WireGuard IP so it's only
+				// reachable by the CP over the tunnel, not the public interface.
+				if err := tunnel.Proxy(wgIP, tunnelPort, vmIP); err != nil {
+					slog.Error("tunnel error", "err", err)
+				}
+			}()
+		}
 	}
 
 	if err := client.ReportVM(ctx, report); err != nil {
@@ -194,4 +228,9 @@ func setupLogger(level string) {
 	var l slog.Level
 	_ = l.UnmarshalText([]byte(level))
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: l})))
+}
+
+func isAndroid() bool {
+	// ANDROID_ROOT is set in every Termux environment
+	return os.Getenv("ANDROID_ROOT") != ""
 }

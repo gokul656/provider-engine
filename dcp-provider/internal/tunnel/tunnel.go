@@ -7,14 +7,20 @@ import (
 	"net"
 )
 
-// Proxy forwards a TCP connection from localPort to vmIP:22.
-// The control plane connects to localPort; the proxy forwards to the VM.
-func Proxy(localPort int, vmIP string) error {
-	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", localPort))
-	if err != nil {
-		return fmt.Errorf("listen :%d: %w", localPort, err)
+// Proxy forwards a TCP connection from bindIP:localPort to vmIP:22.
+// bindIP must be the provider's WireGuard address so the relay port is only
+// reachable by the control plane over the tunnel — never on the provider's
+// public interface. If bindIP is empty it falls back to loopback (same-host
+// testing) rather than 0.0.0.0.
+func Proxy(bindIP string, localPort int, vmIP string) error {
+	if bindIP == "" {
+		bindIP = "127.0.0.1"
 	}
-	slog.Info("tunnel: listening", "port", localPort, "target", vmIP+":22")
+	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", bindIP, localPort))
+	if err != nil {
+		return fmt.Errorf("listen %s:%d: %w", bindIP, localPort, err)
+	}
+	slog.Info("tunnel: listening", "bind", bindIP, "port", localPort, "target", vmIP+":22")
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

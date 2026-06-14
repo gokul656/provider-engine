@@ -23,7 +23,12 @@ darwin-amd64:
 darwin-arm64:
 	GOOS=darwin GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(OUT)/$(BINARY)-darwin-arm64 .
 
-release: linux-amd64 linux-arm64 darwin-amd64 darwin-arm64
+android:
+	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(OUT)/$(BINARY)-android-arm64 .
+	@echo "Copy to Termux: adb push $(OUT)/$(BINARY)-android-arm64 /sdcard/"
+	@echo "Then in Termux: cp /sdcard/$(BINARY)-android-arm64 ~/.local/bin/dcp-provider && chmod +x ~/.local/bin/dcp-provider"
+
+release: linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 android
 	@echo "Built all targets:"
 	@ls -lh $(OUT)/
 

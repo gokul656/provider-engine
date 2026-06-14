@@ -69,3 +69,26 @@ func (r *Redis) AllocWGIP(ctx context.Context) (string, error) {
 func jobQueueKey(providerID string) string {
 	return "dcp:jobs:" + providerID
 }
+
+const tokenSetKey = "dcp:reg_tokens"
+
+// AddToken registers a provider registration token as valid.
+// Called by `dcp-cp token generate`.
+func (r *Redis) AddToken(ctx context.Context, token string) error {
+	return r.c.SAdd(ctx, tokenSetKey, token).Err()
+}
+
+// TokenValid reports whether a registration token was issued and is still valid.
+// Membership-only (not consumed) so a provider can re-register on restart with
+// the same token. Revoke with RevokeToken.
+func (r *Redis) TokenValid(ctx context.Context, token string) (bool, error) {
+	if token == "" {
+		return false, nil
+	}
+	return r.c.SIsMember(ctx, tokenSetKey, token).Result()
+}
+
+// RevokeToken removes a registration token so it can no longer be used.
+func (r *Redis) RevokeToken(ctx context.Context, token string) error {
+	return r.c.SRem(ctx, tokenSetKey, token).Err()
+}

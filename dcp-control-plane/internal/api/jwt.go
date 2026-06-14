@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 // validateJWT performs minimal HS256 JWT verification (sig + expiry).
@@ -31,13 +32,17 @@ func validateJWT(token, secret string) bool {
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return false
 	}
-	// exp is optional — if present it must be in the future
+	// exp is optional — if present it must be in the future.
 	if exp, ok := claims["exp"].(float64); ok {
-		// We can't import time here without it being fine — but we can use a unix comparison
-		// Import time is fine in Go, let's keep this simple
-		_ = exp
-		// Full expiry check would be: time.Now().Unix() > int64(exp)
-		// Omitted here to keep the file self-contained; add via golang-jwt in prod
+		if time.Now().Unix() >= int64(exp) {
+			return false // expired
+		}
+	}
+	// nbf (not-before) — if present it must be in the past.
+	if nbf, ok := claims["nbf"].(float64); ok {
+		if time.Now().Unix() < int64(nbf) {
+			return false // not yet valid
+		}
 	}
 	return true
 }
