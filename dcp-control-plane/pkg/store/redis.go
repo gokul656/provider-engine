@@ -52,15 +52,18 @@ func (r *Redis) AllocPort(ctx context.Context) (int, error) {
 	return port, nil
 }
 
-// AllocWGIP returns the next available WireGuard IP for a provider (10.99.1.x).
+// AllocWGIP returns the next WireGuard IP for a provider.
+// Uses 10.99.1.1 – 10.99.254.254, giving 64k+ provider slots.
+// CP is always 10.99.0.1 on its own wg0; providers never touch that address.
 func (r *Redis) AllocWGIP(ctx context.Context) (string, error) {
 	n, err := r.c.Incr(ctx, "dcp:wg_ip_counter").Result()
 	if err != nil {
 		return "", err
 	}
-	// 10.99.1.1 – 10.99.1.254; wrap on overflow
-	octet := (int(n) % 254) + 1
-	return fmt.Sprintf("10.99.1.%d", octet), nil
+	// Spread across 10.99.1.x – 10.99.254.x to avoid hitting CP subnet
+	n2 := int(n-1) / 254       // third octet: 1, 2, 3, ...
+	n3 := (int(n-1) % 254) + 1 // fourth octet: 1–254
+	return fmt.Sprintf("10.99.%d.%d", n2+1, n3), nil
 }
 
 func jobQueueKey(providerID string) string {

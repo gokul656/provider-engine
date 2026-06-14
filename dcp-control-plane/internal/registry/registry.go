@@ -11,13 +11,14 @@ import (
 )
 
 type Registry struct {
-	pg    *store.PG
-	redis *store.Redis
-	wgPub string // CP WireGuard public key
+	pg         *store.PG
+	redis      *store.Redis
+	wgPub      string // CP WireGuard public key
+	cpEndpoint string // host:port providers connect to (e.g. "1.2.3.4:51820" or "127.0.0.1:51820")
 }
 
-func New(pg *store.PG, redis *store.Redis, cpWGPubKey string) *Registry {
-	return &Registry{pg: pg, redis: redis, wgPub: cpWGPubKey}
+func New(pg *store.PG, redis *store.Redis, cpWGPubKey, cpEndpoint string) *Registry {
+	return &Registry{pg: pg, redis: redis, wgPub: cpWGPubKey, cpEndpoint: cpEndpoint}
 }
 
 type RegisterRequest struct {
@@ -70,7 +71,7 @@ func (r *Registry) Register(ctx context.Context, req RegisterRequest) (*Register
 		return nil, fmt.Errorf("upsert provider: %w", err)
 	}
 
-	wgConf := buildWGConfig(req.WGPubKey, wgIP, r.wgPub)
+	wgConf := buildWGConfig(req.WGPubKey, wgIP, r.wgPub, r.cpEndpoint)
 	slog.Info("registry: registered provider", "id", providerID, "ip", wgIP, "mode", req.Mode)
 	return &RegisterResult{
 		ProviderID: providerID,
@@ -103,16 +104,20 @@ func (r *Registry) SweepOffline(ctx context.Context) {
 	}
 }
 
-// buildWGConfig generates the wg0.conf content to send to a provider.
-func buildWGConfig(providerPubKey, providerIP, cpPubKey string) string {
+// buildWGConfig generates the wg0.conf to send to a newly registered provider.
+// Each provider is a standard WireGuard client with its own wg0.
+// The CP is the only peer — providers never talk directly to each other.
+// PrivateKey points to the path written by GenerateKeypair on the provider machine.
+func buildWGConfig(providerPubKey, providerIP, cpPubKey, cpEndpoint string) string {
+	_ = providerPubKey // the CP adds it as a peer via `wg set wg0 peer`, not in this conf
 	return fmt.Sprintf(`[Interface]
-Address = %s/24
-PrivateKey = <REPLACE_WITH_YOUR_PRIVATE_KEY>
+Address = %s/32
+PrivateKey = /etc/wireguard/prov_private
 
 [Peer]
 PublicKey = %s
-Endpoint = <CP_PUBLIC_IP>:51820
-AllowedIPs = 10.99.0.0/24
+Endpoint = %s
+AllowedIPs = 10.99.0.0/16
 PersistentKeepalive = 25
-`, providerIP, cpPubKey)
+`, providerIP, cpPubKey, cpEndpoint)
 }

@@ -7,71 +7,91 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 )
 
-const configPath = "/etc/wireguard/wg0.conf"
 
-// GenerateKeypair returns (privateKey, publicKey) as base64 strings.
-func GenerateKeypair() (string, string, error) {
-	priv := make([]byte, 32)
-	if _, err := rand.Read(priv); err != nil {
-		return "", "", err
+const (
+	iface      = "wg0"
+	configPath = "/etc/wireguard/wg0.conf"
+	privPath   = "/etc/wireguard/prov_private"
+	pubPath    = "/etc/wireguard/prov_public"
+)
+
+// GenerateKeypair generates a WireGuard keypair and writes both keys to
+// /etc/wireguard/prov_private and /etc/wireguard/prov_public, matching
+// the paths created by wireguard.sh. Returns the public key string.
+func GenerateKeypair() (privKeyB64, pubKeyB64 string, err error) {
+	if err = os.MkdirAll("/etc/wireguard", 0700); err != nil {
+		return
 	}
-	// Clamp per RFC
+
+	// If keys already exist on disk, reuse them (idempotent across restarts).
+	if existing, e := os.ReadFile(pubPath); e == nil {
+		priv, _ := os.ReadFile(privPath)
+		privKeyB64 = strings.TrimSpace(string(priv))
+		pubKeyB64 = strings.TrimSpace(string(existing))
+		return
+	}
+
+	priv := make([]byte, 32)
+	if _, err = rand.Read(priv); err != nil {
+		return
+	}
 	priv[0] &= 248
 	priv[31] = (priv[31] & 127) | 64
 
-	// Use wg command to derive pubkey — avoids reimplementing curve25519 scalar mult
+	privKeyB64 = base64.StdEncoding.EncodeToString(priv)
+
 	cmd := exec.Command("wg", "pubkey")
-	cmd.Stdin = newBase64Reader(priv)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", "", fmt.Errorf("wg pubkey: %w", err)
+	cmd.Stdin = strings.NewReader(privKeyB64 + "\n")
+	out, e := cmd.Output()
+	if e != nil {
+		err = fmt.Errorf("wg pubkey: %w", e)
+		return
 	}
-	privB64 := base64.StdEncoding.EncodeToString(priv)
-	pubB64 := string(out[:len(out)-1]) // strip newline
-	return privB64, pubB64, nil
+	pubKeyB64 = strings.TrimSpace(string(out))
+
+	if err = os.WriteFile(privPath, []byte(privKeyB64+"\n"), 0600); err != nil {
+		return
+	}
+	if err = os.WriteFile(pubPath, []byte(pubKeyB64+"\n"), 0644); err != nil {
+		return
+	}
+	return
 }
 
-// WriteConfig writes the wg0.conf received from the control plane
-// and brings up the interface.
+// WriteConfig writes the wg1.conf received from the control plane and brings
+// up the wg1 interface. CP always owns wg0; provider always owns wg1.
 func WriteConfig(conf string) error {
 	if err := os.MkdirAll("/etc/wireguard", 0700); err != nil {
 		return err
 	}
 	if err := os.WriteFile(configPath, []byte(conf), 0600); err != nil {
-		return fmt.Errorf("write wg0.conf: %w", err)
+		return fmt.Errorf("write %s: %w", configPath, err)
 	}
 	slog.Info("wireguard: wrote config", "path", configPath)
 	return bringUp()
 }
 
 func bringUp() error {
-	// If already up, sync; otherwise start fresh.
 	if isUp() {
-		slog.Info("wireguard: syncing existing interface")
-		out, err := exec.Command("wg", "syncconf", "wg0", configPath).CombinedOutput()
+		slog.Info("wireguard: syncing existing interface", "iface", iface)
+		out, err := exec.Command("wg", "syncconf", iface, configPath).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("wg syncconf: %w: %s", err, out)
 		}
 		return nil
 	}
-	slog.Info("wireguard: bringing up wg0")
-	out, err := exec.Command("wg-quick", "up", "wg0").CombinedOutput()
+	slog.Info("wireguard: bringing up interface", "iface", iface)
+	out, err := exec.Command("wg-quick", "up", iface).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("wg-quick up: %w: %s", err, out)
+		return fmt.Errorf("wg-quick up %s: %w: %s", iface, err, out)
 	}
 	return nil
 }
 
 func isUp() bool {
-	return exec.Command("ip", "link", "show", "wg0").Run() == nil
+	return exec.Command("ip", "link", "show", iface).Run() == nil
 }
 
-func newBase64Reader(b []byte) *os.File {
-	// Write priv key as base64 to a temp file so we can pipe it
-	f, _ := os.CreateTemp("", "wgkey")
-	f.WriteString(base64.StdEncoding.EncodeToString(b) + "\n")
-	f.Seek(0, 0)
-	return f
-}

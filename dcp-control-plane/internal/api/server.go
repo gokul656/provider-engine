@@ -22,6 +22,7 @@ type Config struct {
 	SSHCAPath  string
 	WGPrivKey  string
 	WGPubKey   string
+	WGEndpoint string // host:port advertised to providers (e.g. "127.0.0.1:51820" or public IP)
 	JWTSecret  string
 }
 
@@ -60,7 +61,7 @@ func Serve(cfg Config) error {
 		slog.Warn("wgrelay init failed (non-fatal on non-Linux)", "err", err)
 	}
 
-	reg := registry.New(pg, rdb, cpPubKey)
+	reg := registry.New(pg, rdb, cpPubKey, cfg.WGEndpoint)
 	sched := scheduler.New(pg, rdb)
 	go reg.SweepOffline(ctx)
 

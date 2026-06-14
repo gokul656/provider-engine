@@ -15,6 +15,7 @@ var (
 	sshCAPath  string
 	wgPrivKey  string
 	wgPubKey   string
+	wgEndpoint string
 	jwtSecret  string
 )
 
@@ -30,6 +31,7 @@ var serveCmd = &cobra.Command{
 			SSHCAPath:  sshCAPath,
 			WGPrivKey:  wgPrivKey,
 			WGPubKey:   wgPubKey,
+			WGEndpoint: wgEndpoint,
 			JWTSecret:  jwtSecret,
 		}
 		slog.Info("control plane starting", "addr", listenAddr)
@@ -45,6 +47,7 @@ func init() {
 	serveCmd.Flags().StringVar(&sshCAPath, "ssh-ca", envOr("DCP_SSH_CA", "/etc/dcp/ssh-ca/platform_ca"), "SSH CA private key path")
 	serveCmd.Flags().StringVar(&wgPrivKey, "wg-privkey", envOr("DCP_WG_PRIVKEY", "/etc/wireguard/cp_private"), "WireGuard server private key path")
 	serveCmd.Flags().StringVar(&wgPubKey, "wg-pubkey", envOr("DCP_WG_PUBKEY", "/etc/wireguard/cp_public"), "WireGuard server public key path")
+	serveCmd.Flags().StringVar(&wgEndpoint, "wg-endpoint", envOr("DCP_WG_ENDPOINT", "127.0.0.1:51820"), "WireGuard endpoint sent to providers (host:port)")
 	serveCmd.Flags().StringVar(&jwtSecret, "jwt-secret", envOr("DCP_JWT_SECRET", ""), "JWT signing secret")
 	_ = serveCmd.MarkFlagRequired("jwt-secret")
 }
